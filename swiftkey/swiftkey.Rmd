@@ -1,0 +1,309 @@
+---
+title: 'Data Science Specialization Capstone Project: Natural Language Processing'
+author: "Zvonko Kosic"
+date: "November 17, 2016"
+output: statsr:::statswithr_lab
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r multiplot, echo=FALSE}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+```{r loadpkg, echo=FALSE}
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggthemes))
+```
+## Understanding the problem
+
+Nowadays mobile devices are omminpresent in the whole world. Many people use the for email, 
+social networking, games and a whole range of other activities. The amount of time spend on 
+a mobile device is ever increasing. The interaction with a mobile device happens via speech, 
+gestures or typing. The typing on a mobile device can be cumbersome but its nowadays
+better than in the past. 
+
+To improve the situation many companies, especially SwiftKey, have build smart keyboards that
+make it easier to type on mobile devices. One specialty of such a smart keyboard is the prediction
+of text, based on a predictive text model. 
+
+In this capstone a similiar predictive text model will be build like those used by Swiftkey.
+
+## Getting and Cleaning the Data
+
+The data is from a corpus called HC Corpora (www.corpora.heliohost.org). The files have been 
+language filtered but may still contain some foreign text. In this capstone only the english
+version of twitter, blogs and news corpora will be used. As a first step one will first get
+familiar with the data and examine their properties.
+
+```{r readline, cache=TRUE}
+setwd("~/coursera/swiftkey")
+tw <- readLines("final/en_US/en_US.twitter.txt", skipNul = TRUE)
+bl <- readLines("final/en_US/en_US.blogs.txt",   skipNul = TRUE)
+ne <- readLines("final/en_US/en_US.news.txt",    skipNul = TRUE)
+
+tws <- format(object.size(tw), units="MB")
+bls <- format(object.size(bl), units="MB")
+nes <- format(object.size(ne), units="MB")
+
+twl <- length(tw)
+bll <- length(bl)
+nel <- length(ne)
+```
+
+The Twitter corpora has a size of `r  tws` and `r twl` lines, where each line represents a sentence in the corpora.
+The Blogs corpora has a size of `r bls` and `r bll` lines, lastly the News corpora has a size of `r nes` and `r nel`
+lines. 
+
+```{r twdf, cache=TRUE}
+twdf <- as.data.frame(nchar(tw))
+colnames(twdf) <- c("# of characters")
+summary(twdf)
+```
+The maximum number of characters per line of the Twitter data is 140 characters which is not surprising since there
+is a hard limit at 140 characters per message.
+
+```{r bldf, cache=TRUE}
+bldf <- as.data.frame(nchar(bl))
+colnames(bldf) <- c("# of characters")
+summary(bldf)
+```
+
+```{r nedf, cache=TRUE}
+nedf <- as.data.frame(nchar(ne))
+colnames(nedf) <- c("# of characters")
+summary(nedf)
+```
+Blogs and News corpora have longer text and are 2 to 3 times longer than Twitter texts. About 25% of the texts
+of either corpora are pretty long. The longest text of the Blogs corpora is 40833 characters long and the 
+News corpora has the longest text with 11384 characters. For the visualisation a 99% quantile will be used for
+Blogs and News corpora so that the distribution is now heavily skewed by the remaining 1% which are a factor of 
+1000 longer than the mean.
+
+```{r multiplot_tbn,fig.width=10}
+
+twg <- ggplot(twdf, aes(x=`# of characters`)) + geom_bar()  + ggtitle("Twitter")
+
+bldfs <-bldf %>% filter(`# of characters` < quantile(bldf$`# of characters`, probs = 0.99)) 
+blg <- ggplot(bldfs, aes(x=`# of characters`)) + geom_bar() + ggtitle("Blogs") 
+
+nedfs <-nedf %>% filter(`# of characters` < quantile(nedf$`# of characters`, probs = 0.995)) 
+neg <- ggplot(nedfs, aes(x=`# of characters`)) + geom_bar()  + ggtitle("News")
+
+multiplot(twg,blg,neg, cols = 3)
+```
+
+Twitter's nature is and are small messages under 140 characters which is reflected in the distribution above. News on
+the other side have a more informative and concise characteristic thats why one sees many articles between 200 and 
+400 characters. Last but not least the Blogs are somehow the hybrid between them, often short but every once in a 
+while longer. 
+
+### Data Acquisition and Cleaning
+In this part one is going to prepare the data for further processing. Its often the case the this 
+part is the most tedious task and one has to be carefull not to abandon important data. 
+
+#### Sampling
+Since the files are pretty large the data will be subset. From every file get 10000 lines
+by sampling. This is a starting point depending on the precision one can use more samples
+later for better results.
+```{r sample}
+set.seed(666)
+tw.smp <- sample(tw, 10000, replace = F)
+bl.smp <- sample(bl, 10000, replace = F)
+ne.smp <- sample(ne, 10000, replace = F)
+tbn <- paste(tw.smp, bl.smp, ne.smp)
+```
+#### Removing not needed tokens
+There are several characters/tokens one do not want to predict. The next steps involve the removing
+of profanity, numbers, punctuation etc. First remove non numeral alphabetical characters except apostrophes. 
+```{r corpus}
+suppressPackageStartupMessages(library(tm))
+
+corp <- Corpus(VectorSource(tbn))
+bad  <- readLines("profanity.txt")
+
+
+remHashtags        <- function(x) { gsub("#[a-zA-z0-9]+", " ", x) }
+remDecimalsEN      <- function(x) { gsub("([0-9]*)\\.([0-9]+)", " ", x) }
+remDecimalsDE      <- function(x) { gsub("([0-9]*)\\,([0-9]+)", " ", x) }
+
+
+corp <- tm_map(corp, remDecimalsDE)
+corp <- tm_map(corp, remDecimalsEN)
+corp <- tm_map(corp, removeNumbers)
+corp <- tm_map(corp, remHashtags)
+corp <- tm_map(corp, stripWhitespace)
+corp <- tm_map(corp, removePunctuation)
+corp <- tm_map(corp, tolower)
+corp <- tm_map(corp, removeWords, stopwords("english"))
+```
+As the last step of cleaning remove stopwords (don't, isn't, etc) from the corpus and filter for profanity.
+```{r profanity}
+corp <- tm_map(corp, removeWords, bad)
+```
+#### N-Grams Top 20
+For further analysis of the data build N-Grams (single word tokenization, bi-grams and tri-grams) 
+```{r ngram}
+suppressPackageStartupMessages(library(RWeka))
+n1 <- NGramTokenizer(corp, Weka_control(min = 1, max = 1))
+n2 <- NGramTokenizer(corp, Weka_control(min = 2, max = 2))
+n3 <- NGramTokenizer(corp, Weka_control(min = 3, max = 3))
+```
+## Exploratory Analysis
+Here one will try to answer what the distribution of word frequencies is and what
+frequencies one-grams, bi-grams and tri-grams have.
+```{r freq}
+n1.df <- data.frame(table(n1))
+n2.df <- data.frame(table(n2))
+n3.df <- data.frame(table(n3))
+
+n1.df.so <- n1.df[order(n1.df$Freq, decreasing = TRUE),]
+n2.df.so <- n2.df[order(n2.df$Freq, decreasing = TRUE),]
+n3.df.so <- n3.df[order(n3.df$Freq, decreasing = TRUE),]
+
+
+n1.top20 <- n1.df.so[1:20,]
+colnames(n1.top20) <- c("Word","Frequency")
+
+n2.top20 <- n2.df.so[1:20,]
+colnames(n2.top20) <- c("Word","Frequency")
+
+n3.top20 <- n3.df.so[1:20,]
+colnames(n3.top20) <- c("Word","Frequency")
+```
+
+Basic bar plots with the top20 one-, bi-, and tri-grams.
+
+```{r freqplot, fig.width=10}
+f0 <- ggplot(n1.top20, aes(x=Word, y=Frequency)) + geom_bar(stat="Identity") + geom_text(aes(label=Frequency), vjust=-0.2) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("One-Gram Freq.")
+f1 <- ggplot(n2.top20, aes(x=Word, y=Frequency)) + geom_bar(stat="Identity") + geom_text(aes(label=Frequency), vjust=-0.2) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("Bi-Gram Freq.")
+f2 <- ggplot(n3.top20, aes(x=Word, y=Frequency)) + geom_bar(stat="Identity") + geom_text(aes(label=Frequency), vjust=-0.2) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("Tri-Gram Freq.")
+multiplot(f0, f1, f2, cols = 3)
+```
+
+For a better conception the top20 grams as wordclouds.
+
+```{r wordcloud, fig.width=10}
+par(mfrow = c(1,3))
+library("wordcloud")
+wordcloud(scale=c(4,.3), n1.top20$Word, n1.top20$Frequency, random.order = F, rot.per = 0.5, colors = brewer.pal(8,"Dark2"))
+wordcloud(scale=c(4,.3), n2.top20$Word, n2.top20$Frequency, random.order = F, rot.per = 0.5, colors = brewer.pal(8,"Dark2"))
+wordcloud(scale=c(4,.3), n3.top20$Word, n3.top20$Frequency, random.order = F, colors = brewer.pal(8,"Dark2"))
+```
+
+So far only the top10 grams were considered, but one has to keep an eye on the 'grams' which are not very frequent.
+Lets see how many words we have that are only seen one time.
+
+```{r onetimer}
+o1 <- nrow(n1.df.so[n1.df.so$Freq == 1,])
+s1 <- sum(n1.df.so$Freq)
+o2 <- nrow(n2.df.so[n2.df.so$Freq == 1,])
+s2 <- sum(n2.df.so$Freq)
+o3 <- nrow(n3.df.so[n3.df.so$Freq == 1,])
+s3 <- sum(n3.df.so$Freq)
+```
+
+In the case of one-grams there are `r o1`  of `r s1` words in the text that occur only once. For bi-grams there are 
+`r o2` of `r s2` words in the text that occur only once and for tri-grams there are `r o3` of `r s3` words that have a
+frequency of one.
+
+### How many unique words do you need in a frequency sorted dictionary to cover e.g. 50% of all word instances in the language? 
+
+Lets calculate the coverage of need words for a bunch of percentages (10%-90%). 
+
+```{r cover}
+d <- c()
+f <- sum(n1.df.so$Freq)
+s <- seq(10, 90, by = 10)
+for (p in s)
+{
+  c <- 0
+  for(i in 1:length(n1.df.so$Freq)) 
+  {
+    c <- c + n1.df.so$Freq[i]
+    if(c >= p/100*f){break}
+  }
+  d <- c(d, i)
+}
+df <- data.frame(percent=s, count=d)
+df
+ggplot(df, aes(x = percent, y = count)) + geom_line()
+```
+
+With higher coverage we need exponentially more words.  For every 10% increase in coverage one needs to double
+the words. 
+
+### How many words come from foreign language?
+
+Since one does not know what and how many foreign language words are in the corpus the best way would be to 
+compare the corpus to a english dictionary and everything which is not in the english dictionary is removed. 
+After examining the data, the amount of foreign language is negligible and not considered in the scope of
+this work.
+
+### How to increase the coverage, efficiency, performance?
+
+Coverage could be increased if other sources of words are included into consideration. Furthermore context-clustering
+could be beneficial, which means to introduce a context to the corpora like sport events, holidays etc. This
+way word groups could be clustered into groups. As another step to increase efficiency is to remove low-frequency words
+and use the remaining to increase the prediction.
+
+### Further Work
+
+Increase efficiency, performance and prediction based on the findings listed before. Build a prediction model
+and shiny app.
+
+
+
+
+
+
+
+
+
